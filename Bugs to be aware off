@@ -1,4 +1,4 @@
 There are notably two bugs you should be aware off. One is where the roads randomly clips outside the map (more frequent at high speeds). I wondered if this was due to the roblox physics engine having hickups, but I am not sure.
 The second bug is where VectorForce applied to the HumanoidRootPart gets activated, even though it should not. 
 Movement is "A" for left, "D" for right and "S" for down. 
-Also, I don't know if you guys do this, but if you could provide some feedback to what I can improve on, that would help a lot. Thanks
+Also, I don't know if you guys do this, but if you could provide some feedback to what I can improve on, it would help a lot. Thanks for reviewing my submission.
