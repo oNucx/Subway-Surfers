@@ -1,0 +1,546 @@
+I used ProfileStore by Sleitnick in this project to store data
+
+---------CLIENT------------
+
+------------------------------PlayerGuiHandler----------------------------------
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UpdatePointsEvent = ReplicatedStorage.Events.UpdatePointsEvent
+local GuiLoadedEvent = ReplicatedStorage.Events.GuiLoadedEvent
+local StartGameEvent = ReplicatedStorage.Events.StartGameEvent
+local EndGameEvent: RemoteEvent = ReplicatedStorage.Events.EndGameEvent
+
+local player
+local PlayerUI
+local StartGame
+local RestartGame
+local PointsCounter
+
+--When character is loaded, connects an event to the button which starts the game when clicked
+GuiLoadedEvent.OnClientEvent:Connect(function()
+	player = Players.LocalPlayer
+	PlayerUI = player.PlayerGui.PlayerUI
+
+	StartGame = PlayerUI.StartGame
+	RestartGame = PlayerUI.RestartGame
+
+	StartGame.Transparency = 0
+	StartGame.Interactable = true
+
+	StartGame.MouseButton1Click:Connect(function()
+		StartGame.Visible = false
+		RestartGame.Transparency = 0
+		RestartGame.Interactable = true
+
+		StartGameEvent:FireServer(player, true)
+	end)
+
+	RestartGame.MouseButton1Click:Connect(function()
+		RestartGame.Visible = false
+		EndGameEvent:FireServer(player, true)
+	end)
+end)
+
+--Updates the clients displayed points
+UpdatePointsEvent.OnClientEvent:Connect(function(points)
+	PointsCounter = PlayerUI.PointsCounter
+	PointsCounter.Text = points
+end)
+
+--Displays a loading screen which diseppears after 2 seconds and resets PointsCounter
+EndGameEvent.OnClientEvent:Connect(function()
+	local LoadingGui = player.PlayerGui.LoadingGui
+	LoadingGui.Enabled = true
+
+	task.wait(2)
+	LoadingGui.Enabled = false
+
+	RestartGame.Transparency = 0.5
+	RestartGame.Interactable = false
+	RestartGame.Visible = true
+	StartGame.Visible = true
+	PointsCounter.Text = "0"
+end)
+
+------------------------------PlayerInputHandler----------------------------------
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local CharacterInitEvent = ReplicatedStorage.Events.CharacterInitEvent
+local EndGameEvent = ReplicatedStorage.Events.EndGameEvent
+local StartGameEvent: RemoteEvent = ReplicatedStorage.Events.StartGameEvent
+
+local player = Players.LocalPlayer
+
+local Platform = workspace.Platform
+
+local LeftPlate = Platform:WaitForChild("LeftPlate")
+local RightPlate = Platform:WaitForChild("RightPlate")
+
+local connected = false
+
+--Loads animations, adds a RunService function which check if the player is hit
+CharacterInitEvent.OnClientEvent:Connect(function()
+	local character = player.Character
+	local HumanoidRootPart = character:WaitForChild("HumanoidRootPart")
+	local head = character:WaitForChild("Head")
+
+	local Animation = Instance.new("Animation")
+	Animation.AnimationId = "rbxassetid://129808203600336"
+
+	local Animator = character.Humanoid.Animator
+	local AnimationTrack = Animator:LoadAnimation(Animation)
+	local AnimationPlaying = false
+
+	--Constantly checks if player is hit by an obstacle. If so, the game ends
+	RunService.Heartbeat:Connect(function()
+		if connected then
+			for _, part in pairs(workspace:GetPartsInPart(character.hitbox)) do
+				if part:FindFirstAncestor(character.Name) ~= character and part.Parent ~= workspace.Platform then
+					EndGameEvent:FireServer(player)
+					connected = false
+				end
+			end
+		end
+	end)
+
+	--Handles UserInputs
+	UserInputService.InputBegan:Connect(function(input)
+		local RaycastParams = RaycastParams.new()
+		RaycastParams.FilterType = Enum.RaycastFilterType.Exclude
+		RaycastParams.FilterDescendantsInstances = { Platform.SpawnLocation }
+		--Uses a ray to determine which plate the character is on top off
+		local ray =
+			workspace:Raycast(character:WaitForChild("Right Leg").Position, Vector3.new(0, -10, 0), RaycastParams)
+
+		local StandingOnTopOff = ray.Instance
+
+		if input.KeyCode == Enum.KeyCode.A and StandingOnTopOff ~= LeftPlate then
+			head.CFrame = head.CFrame * CFrame.new(-6.5, 0, 0)
+		elseif input.KeyCode == Enum.KeyCode.D and StandingOnTopOff ~= RightPlate then
+			head.CFrame = head.CFrame * CFrame.new(6.5, 0, 0)
+		elseif input.KeyCode == Enum.KeyCode.S then
+			if AnimationPlaying then
+				return
+			end
+
+			local Downward = false
+
+			--Runs regardless of the state of the character
+			task.spawn(function()
+				AnimationPlaying = true
+				AnimationTrack:Play()
+				AnimationTrack.Stopped:Wait()
+				AnimationPlaying = false
+				Downward = false
+			end)
+
+			--Constantly checks if the player pressed S while in the air
+			while not Downward do
+				--If they did, the humanoidRootPart will experience a downward force which makes the gameplay more enjoyable and fast paced
+				if
+					input.KeyCode == Enum.KeyCode.S
+					and character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall
+				then
+					Downward = true
+					print("Force activated")
+					local DownwardForce = HumanoidRootPart.DownwardForce
+					DownwardForce.Enabled = true
+					DownwardForce.Force = HumanoidRootPart.CFrame.UpVector * 4000 * -1
+					wait(0.2)
+					DownwardForce.Enabled = false
+					DownwardForce.Force = Vector3.new(0, 0, 0)
+					print(DownwardForce.Force)
+				end
+				wait()
+			end
+		end
+	end)
+end)
+
+--Starts the RunService loop
+StartGameEvent.OnClientEvent:Connect(function()
+	connected = true
+end)
+
+---------SERVER------------
+
+------------------------------DataInit---------------------------------------
+--Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+--ProfileStore
+local ProfileStore = require(ServerScriptService.ServerPackages.ProfileStore)
+
+local DataLoaded: BindableEvent = ReplicatedStorage.Events.DataLoaded
+
+local function GetStoreName()
+	return RunService:IsStudio() and "Test" or "Live"
+end
+
+local Template = require(ServerScriptService.Data.Template)
+local DataManager = require(ServerScriptService.Data.DataManager)
+
+--Access profile store
+local PlayerStore = ProfileStore.New(GetStoreName(), Template)
+
+--typeof(PlayerStore:StartSessionAsync() assigns the the type of the profile to be the type of the player joined
+--Add leaderstats and synchronize player data
+local function Initialize(player: Player, profile: typeof(PlayerStore:StartSessionAsync()))
+	--For leaderstats
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Parent = player
+	leaderstats.Name = "leaderstats"
+
+	local HighScore = Instance.new("IntValue")
+	HighScore.Parent = leaderstats
+	HighScore.Value = profile.Data.HighScore
+	HighScore.Name = "HighScore"
+
+	--Sync player data (UI updates, inventory update etc.)
+	ReplicatedStorage.Events.SetHighScore:FireClient(player, profile.Data.HighScore)
+	DataLoaded:Fire()
+end
+
+--Creates and stores a profile
+local function PlayerAddedFunction(player: Player)
+	--Start a new profile session
+	local profile = PlayerStore:StartSessionAsync("Player" .. player.UserId, {
+		Cancel = function()
+			return player.Parent ~= Players
+		end,
+	})
+
+	--Sanity check to ensure profile exists
+	if profile ~= nil then
+		profile:AddUserId(player.UserId) -- GDPR compliance
+		profile:Reconcile() -- Fill in missing data variables from template
+
+		--Handles session-locking
+		profile.OnSessionEnd:Connect(function()
+			DataManager.Profiles[player] = nil
+			player:Kick("Data error occured, Please rejoin.")
+		end)
+
+		--Save profile for later use
+		if player.Parent == Players then
+			DataManager.Profiles[player] = profile
+			Initialize(player, profile)
+		else
+			profile:EndSession()
+		end
+	else
+		--If server shuts down while player is joining
+		player:Kick("Data error occured, Please rejoin.")
+	end
+end
+
+--Early joiners
+for _, player in Players:GetPlayers() do
+	task.spawn(PlayerAddedFunction, player)
+end
+Players.PlayerAdded:Connect(PlayerAddedFunction)
+
+Players.PlayerRemoving:Connect(function(player)
+	local profile = DataManager.Profiles[player]
+	if not profile then
+		return
+	end
+	profile:EndSession()
+	DataManager.Profiles[player] = nil
+end)
+
+-----------------------------------------GameManager-------------------------------------------
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local DataManager = require(ServerScriptService.Data.DataManager)
+local RoadSpawner = require(ServerScriptService.Modules.RoadSpawner)
+
+local StartGameEvent: RemoteEvent = ReplicatedStorage.Events.StartGameEvent
+local EndGameEvent: RemoteEvent = ReplicatedStorage.Events.EndGameEvent
+
+local GameParameters = require(ServerScriptService.Modules.GameParameters)
+
+local SpawnPart = workspace.SpawnPart
+local DeletePart = workspace.DeletePart
+
+local RoundStarted = false
+
+--Starts spawning the roads
+local StartRound = function()
+	RoadSpawner.SpawnRoad()
+
+	--If EndPart is inside SpawnPart, the RoadSpawner module spawns a new road. If a member of any given clone of RoadTemplate touches DeletePart, the RoadSpawner module
+	--deletes the part
+	while RoundStarted do
+		for _, member in pairs(workspace:GetPartsInPart(SpawnPart)) do
+			if member:IsA("Part") and member.Name == "EndPart" then
+				print("Spawn road")
+				RoadSpawner.SpawnRoad()
+				task.wait(0.5)
+			end
+		end
+		for _, member in pairs(workspace:GetPartsInPart(DeletePart)) do
+			if member:IsA("Part") and member:FindFirstAncestor("RoadTemplate") then
+				RoadSpawner.DeleteRoad(member)
+				break
+			end
+		end
+		wait()
+	end
+end
+
+--When the StartButton is clicked, the StartRound() function is called and the game parameters gets updated (Speed of road, points). I use task.spawn since
+--GameParameters.Start() includes while loops
+StartGameEvent.OnServerEvent:Connect(function(player)
+	RoundStarted = true
+	StartGameEvent:FireClient(player)
+	task.spawn(function()
+		StartRound()
+	end)
+	GameParameters.Start(player)
+end)
+
+--Ends the generation of roads, and terminates every RoadTemplate from memory. Stores the new HighScore and resets parameters and the gui (EndGameEvent).
+--RoadSpawner.Restart() is explained in the given module
+EndGameEvent.OnServerEvent:Connect(function(player)
+	RoundStarted = false
+
+	for _, road in pairs(workspace.RoadTracks:GetChildren()) do
+		road:Destroy()
+		road = nil
+	end
+
+	local newHighScore = player.leaderstats.HighScore.Value
+	DataManager.AddHighScore(player, newHighScore)
+
+	RoadSpawner.Restart()
+	GameParameters.RestartParameters()
+
+	EndGameEvent:FireClient(player)
+end)
+
+-------------------------------------------LoadCharacter------------------------------------------------
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local CharacterInitEvent = ReplicatedStorage.Events.CharacterInitEvent
+local GuiLoadedEvent = ReplicatedStorage.Events.GuiLoadedEvent
+local DataLoaded = ReplicatedStorage.Events.DataLoaded
+
+--When the player is added to the server, creates a hitbox and weld, where the hitbox is attached to the torso by the weld.
+--A VectorForce which is used in PlayerInputHandler. Then starts the characterInit function explained in PlayerInputHandler
+--When the leaderstats and data is gathered and loaded, enables the StartButton
+Players.PlayerAdded:Connect(function(player)
+	local character = player.CharacterAdded:Wait()
+	local HumanoidRootPart = character.HumanoidRootPart
+	local humanoid = character:WaitForChild("Humanoid")
+
+	if humanoid then
+		humanoid.WalkSpeed = 0
+
+		local hitbox = Instance.new("Part")
+		hitbox.Name = "hitbox"
+		hitbox.Size = HumanoidRootPart.Size
+		hitbox.Anchored = false
+		hitbox.CanCollide = false
+		hitbox.Transparency = 1
+		hitbox.CFrame = HumanoidRootPart.CFrame
+		hitbox.Parent = character
+
+		local Weld = Instance.new("WeldConstraint")
+		Weld.Parent = hitbox
+		Weld.Part0 = character:WaitForChild("Torso")
+		Weld.Part1 = hitbox
+
+		local VectorForce = Instance.new("VectorForce")
+		VectorForce.Name = "DownwardForce"
+		VectorForce.Enabled = false
+		VectorForce.Attachment0 = HumanoidRootPart.RootAttachment
+		VectorForce.Parent = HumanoidRootPart
+		VectorForce.Force = Vector3.new(0, 0, 0)
+
+		CharacterInitEvent:FireClient(player)
+
+		DataLoaded.Event:Connect(function()
+			GuiLoadedEvent:FireClient(player)
+		end)
+	end
+end)
+
+------------------MODULES--------------------
+
+-------------------------------Template----------------------------------
+return {
+	HighScore = 0,
+}
+
+---------------------------------DataManager----------------------------------------
+local DataManager = {}
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+DataManager.Profiles = {}
+
+function DataManager.AddHighScore(player: Player, NewHighscore: number)
+	local profile = DataManager.Profiles[player]
+	if not profile then
+		return
+	end
+
+	profile.Data.HighScore = NewHighscore
+
+	local leaderstats = player:FindFirstChild("leaderstats")
+	leaderstats.HighScore.Value = profile.Data.HighScore
+
+	ReplicatedStorage.Events.SetHighScore:FireClient(player, profile.Data.HighScore)
+end
+
+return DataManager
+
+------------------------------------------------GameParameters------------------------------------
+local GameParameters = {
+	Points = 0,
+	Speed = 50,
+	GameStarted = false,
+}
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UpdatePointsEvent = ReplicatedStorage.Events.UpdatePointsEvent
+
+--Updates the speed of the track and points of the player
+function GameParameters.Start(player)
+	local TimeWhenStarted = DateTime.now()
+	local timeElapsed = 0
+	local endTime = 0
+	GameParameters.GameStarted = true
+
+	--The code is a little messy here, but essentially what it does is updating the points to the player. Updates the highscore as well if current points is higher than
+	--points in highscore
+	task.spawn(function()
+		while GameParameters.GameStarted do
+			endTime = DateTime.now()
+			timeElapsed = endTime.UnixTimestamp - TimeWhenStarted.UnixTimestamp
+
+			GameParameters.Points = math.floor(timeElapsed ^ 2)
+			UpdatePointsEvent:FireClient(player, GameParameters.Points)
+			if GameParameters.Points > player.leaderstats.HighScore.Value then
+				player.leaderstats.HighScore.Value = GameParameters.Points
+			end
+			wait(0.2)
+		end
+	end)
+
+	--Adds 1 to the speed every second making the track go faster
+	while GameParameters.GameStarted do
+		print("running")
+		GameParameters.Speed += 1
+		print(GameParameters.Speed)
+		GameParameters.Points = timeElapsed * 2
+		task.wait(1)
+	end
+end
+
+--Stops the while-loops responsible for tracking and updating points and speed
+function GameParameters.Stop()
+	GameParameters.GameStarted = false
+end
+
+--Resets parameters
+function GameParameters.RestartParameters()
+	GameParameters.Speed = 50
+	GameParameters.Points = 0
+	GameParameters.GameStarted = false
+end
+
+return GameParameters
+
+----------------------------------------------------RoadSpawner-------------------------------------------
+
+local RoadSpawner = {}
+
+local ServerScriptService = game:GetService("ServerScriptService")
+local ServerStorage = game:GetService("ServerStorage")
+
+local GameParameters = require(ServerScriptService.Modules.GameParameters)
+
+local Variables = {
+	CurrentRoad = nil,
+	PreviousRoad = nil,
+}
+
+--Spawns a clone of RoadTemplate to workspace
+function RoadSpawner.SpawnRoad()
+	local SpawnPart = workspace.SpawnPart
+	local RoadTemplate = ServerStorage.MapParts.RoadTemplate:Clone()
+	local LinearVelocity = RoadTemplate.PrimaryPart.LinearVelocity
+	Variables.PreviousRoad = Variables.CurrentRoad
+	Variables.CurrentRoad = RoadTemplate
+
+	--If the speed is updated, it applies to all RoadTemplates in workspace, not just one
+	for _, track in pairs(workspace.RoadTracks:GetChildren()) do
+		track.PrimaryPart.LinearVelocity.LineVelocity = GameParameters.Speed
+	end
+
+	LinearVelocity.MaxForce = math.huge
+	LinearVelocity.LineDirection = Vector3.new(-1, 0, 0)
+	LinearVelocity.LineVelocity = GameParameters.Speed
+
+	local randomNum = math.random(1, 3)
+	local TableOfObstacles = ServerStorage.MapParts.Obstacles:GetChildren()
+
+	--Randomly generates obstacle on the road gives some pre-defined positions. Each possible obstacle location has a 1/3 chance of having an obstacle
+	for _, part in pairs(RoadTemplate.PossibleObstacleLocations:GetChildren()) do
+		local otherRandomNum = math.random(1, 3)
+		if randomNum == otherRandomNum then
+			local RandomObstacleNumber = math.random(1, #ServerStorage.MapParts.Obstacles:GetChildren())
+			local randomObstacle = TableOfObstacles[RandomObstacleNumber]:Clone()
+			local WeldConstraint = randomObstacle.PrimaryPart.WeldConstraint
+			WeldConstraint.Part0 = RoadTemplate.PrimaryPart
+			WeldConstraint.Part1 = randomObstacle.PrimaryPart
+
+			randomObstacle.Parent = RoadTemplate
+			randomObstacle:PivotTo(part.CFrame)
+		end
+	end
+
+	--Spawns the RoadTemplate at the SpawnPart in workspace
+	RoadTemplate.Parent = workspace.RoadTracks
+	RoadTemplate:PivotTo(SpawnPart.CFrame)
+
+	--Every time the EndPart of the RoadTemplate touches the SpawnPart, it spawns a new clone of RoadTemplate due to the while-loop in GameManager.
+	--The RoadTemplate's CFrame should be the same as the EndPart of the previous RoadTemplate.
+	--But since there are no RoadTemplate's in workspace to begin with, we have to spawn one clone of RoadTemplate in order to start the mechanism.
+	if Variables.CurrentRoad ~= nil and Variables.PreviousRoad ~= nil then
+		local currentEndPartCFrame = Variables.PreviousRoad.EndPart.CFrame
+
+		RoadTemplate:PivotTo(currentEndPartCFrame)
+	else
+		RoadTemplate:PivotTo(SpawnPart.CFrame)
+	end
+end
+
+--Deletes a clone of RoadTemplate from memory
+function RoadSpawner.DeleteRoad(road)
+	local model = road.Parent
+	model:Destroy()
+	model = nil
+end
+
+--Sets the variables to nil
+function RoadSpawner.Restart()
+	Variables.CurrentRoad = nil
+	Variables.PreviousRoad = nil
+end
+
+return RoadSpawner
